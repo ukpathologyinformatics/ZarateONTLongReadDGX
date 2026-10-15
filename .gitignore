@@ -1,0 +1,10 @@
+images/*.sqfs
+images/*.whl
+models/*
+!models/.keep
+references/*
+!references/.keep
+sniffles/*.bed
+zarate_samples.txt
+mahi_mahi*whl
+.env
