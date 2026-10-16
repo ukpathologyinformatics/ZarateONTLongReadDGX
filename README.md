@@ -80,10 +80,12 @@ Running the pipeline for a sample is initiated using the `process_zarate_samples
 	Required Parameters:
 		-s <sample_id(s)> : Comma-separated sample IDs (will be used as names for output folders)
 		-p <task[,task...]> : Comma-separated task list (available: snp/snv, sv, str, cnv, methyl, all)
+	Optional Parameters:
+		-n : Perform a dry run of the script to see what changes and jobs will be run
 	
 	e.g. ./process_zarate_samples.sh -s 0002 -p snp,cnv,methyl
 
-This script will establish a dependency tree of Slurm jobs to process all pipeline tasks as efficiently as possible.
+This script will naively attempt to determine which steps a sample actually needs and establish a dependency tree of Slurm jobs to process all pipeline tasks as efficiently as possible.
 
 #### Manually using the scripts
 

@@ -6,6 +6,9 @@
 #	This script launches a pipeline to process long read sequencing data from the Nanopore
 #	Sequencing Platform that process SNP/SNV, STR, SV, and Methylation results
 
+# Pull in configuration environment variables
+source .env
+
 usage() {
 	echo "Usage: $0 -s <sample_id(s)> -p <[snp|snv|sv|str|cnv|methyl|all]> -o <output_folder>"
 }
@@ -15,7 +18,8 @@ show_help() {
 	echo "Required Parameters:" 1>&2
 	echo "	-s <sample_id(s)> : Comma-separated sample IDs (will be used as names for output folders)" 1>&2
 	echo "	-p <task[,task...]> : Comma-separated task list (available: snp/snv, sv, str, cnv, methyl, all)" 1>&2
-	#echo "Optional Parameters:" 1>&2
+	echo "Optional Parameters:" 1>&2
+	echo "	-n : Perform a dry run of the script to see what changes and jobs will be run" 1>&2
 	#echo "	-o <output_folder> : Overrides the root output folder for processing results" 1>&2
 }
 
@@ -33,16 +37,18 @@ check_args() {
 }
 
 check_sample() {
-	RUNS_DIR="/project/cdhick2_dgxzarate25/nanopore_runs"
-	POD5_SUB_DIR=$(grep $1 zarate_samples.txt | awk '{ print $3 }')
-	if [[ -z "${POD5_SUB_DIR}" ]]; then
-		printf "ERROR: sample ${1} not found in records.\n"
-		exit 1
-	fi
-	POD5_DIR="${RUNS_DIR}/${POD5_SUB_DIR}"
-	if [[ ! -d $POD5_DIR ]]; then
-		printf "ERROR: sample ${1} pod5 folder [${POD5_DIR}] does not exist.\n"
-		exit 1
+	POD5_SUB_DIRECTORY=$(grep $1 $SLURM_ARRAY_FILE | awk '{ print $3 }')
+	POD5_DIRECTORY="${RUNS_DIRECTORY}/${POD5_SUB_DIRECTORY}"
+	if [[ -z "${POD5_SUB_DIRECTORY}" ]]; then
+		printf "WARNING: sample ${1} not found in records, skipping.\n" >&2
+		echo 0
+	else
+		if [[ ! -d $POD5_DIRECTORY ]]; then
+			printf "WARNING: sample ${1} pod5 folder [${POD5_DIRECTORY}] does not exist, skipping.\n" >&2
+			echo 0
+		else
+			echo 1
+		fi
 	fi
 }
 
@@ -77,14 +83,14 @@ PROCESS_STR=0
 PROCESS_CNV=0
 PROCESS_METHYL=0
 OUTPUT_DIR=""
+DRYRUN=0
 
-while getopts ":s:p:o:h" o; do
+while getopts ":s:p:o:hn" o; do
 	case "${o}" in
 		s)
 			ORIGINAL_SAMPLE_IDS=$OPTARG
 			IFS=',' read -ra IDS <<< "$OPTARG"
 			for ID in "${IDS[@]}"; do
-				check_sample $ID
 				if [[ -z "${SAMPLE_IDS}" ]]; then
 					SAMPLE_IDS+=$((10#$ID))
 				else
@@ -129,6 +135,7 @@ while getopts ":s:p:o:h" o; do
 			done
 		;;
 		o) OUTPUT_DIR="${OPTARG}" ;;
+		n) DRYRUN=1 ;;
 		h)
             show_help
             exit 1
@@ -138,78 +145,334 @@ shift $((OPTIND-1))
 
 check_args
 
-source .env
+if [[ $DRYRUN == 1 ]]; then
+	echo "Performing a dry run, no changes will be made or Slurm jobs run."
+fi
 
-# Creating results output directories for sample(s)
+#echo "PROCESS_SNP = ${PROCESS_SNP}"
+#echo "PROCESS_SV = ${PROCESS_SV}"
+#echo "PROCESS_STR = ${PROCESS_STR}"
+#echo "PROCESS_CNV = ${PROCESS_CNV}"
+#echo "PROCESS_METHYL = ${PROCESS_METHYL}"
+
+ALIGNMENT_JOB_SAMPLES=""
+SORT_JOB_SAMPLES=""
+INDEX_JOB_SAMPLES=""
+
+CLAIR3_JOB_SAMPLES=""
+
+WHATSHAP_JOB_SAMPLES=""
+HAPLOTAGGED_INDEX_JOB_SAMPLES=""
+MAHI_MAHI_JOB_SAMPLES=""
+
+MOSDEPTH_JOB_SAMPLES=""
+SPECTRE_JOB_SAMPLES=""
+
+SNIFFLES_JOB_SAMPLES=""
+NEEDLR_JOB_SAMPLES=""
+
+MODKIT_PILEUP_JOB_SAMPLES=""
+
+# Discovering per-sample needed tasks
 IFS=',' read -ra SAMPLES <<< "$ORIGINAL_SAMPLE_IDS"
-for SAMPLE in "${SAMPLES[@]}"; do
-	echo "Creating output directories for sample: ${SAMPLE}"
-	mkdir -p ${RESULTS_DIRECTORY}/${SAMPLE}/logs
+IFS=',' read -ra ARRAY_IDS <<< "$SAMPLE_IDS"
+for i in "${!SAMPLES[@]}"; do
+	SAMPLE="${SAMPLES[$i]}"
+	SAMPLE_EXISTS=$(check_sample $SAMPLE)
+	if [[ $SAMPLE_EXISTS == 0 ]]; then
+		continue
+	fi
+	ARRAY_ID="${ARRAY_IDS[$i]}"
+	# Creating output directories
+	if [[ ! -d "${RESULTS_DIRECTORY}/${SAMPLE}" ]]; then
+		echo "Creating output directories for sample: ${SAMPLE}"
+		if [[ $DRYRUN == 0 ]]; then
+			mkdir -p ${RESULTS_DIRECTORY}/${SAMPLE}/logs
+		fi
+	fi
+	# Checking if sample needs secondary analysis
+	SAMPLE_ALIGNED_BAM_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.aligned.bam"
+	SAMPLE_SORTED_BAM_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.aligned.sorted.bam"
+	SAMPLE_INDEX_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.aligned.sorted.bam.bai"
+	if [[ ! -s "${SAMPLE_INDEX_FILE}" ]]; then
+		# Sorted .bai index does not exist
+		if [[ ! -s "${SAMPLE_SORTED_BAM_FILE}" ]]; then
+			# Sorted .bam file does not exist
+			if [[ ! -s "${SAMPLE_ALIGNED_BAM_FILE}" ]]; then
+				# Aligned .bam file does not exist
+				if [[ -n "${ALIGNMENT_JOB_SAMPLES}" ]]; then
+					ALIGNMENT_JOB_SAMPLES+=","
+				fi
+				ALIGNMENT_JOB_SAMPLES+="${ARRAY_ID}"
+				if [[ -n "${SORT_JOB_SAMPLES}" ]]; then
+					SORT_JOB_SAMPLES+=","
+				fi
+				SORT_JOB_SAMPLES+="${ARRAY_ID}"
+				if [[ -n "${INDEX_JOB_SAMPLES}" ]]; then
+					INDEX_JOB_SAMPLES+=","
+				fi
+				INDEX_JOB_SAMPLES+="${ARRAY_ID}"
+			else
+				# Aligned .bam file exists
+				if [[ -n "${SORT_JOB_SAMPLES}" ]]; then
+					SORT_JOB_SAMPLES+=","
+				fi
+				SORT_JOB_SAMPLES+="${ARRAY_ID}"
+				if [[ -n "${INDEX_JOB_SAMPLES}" ]]; then
+					INDEX_JOB_SAMPLES+=","
+				fi
+				INDEX_JOB_SAMPLES+="${ARRAY_ID}"
+			fi
+		else
+			# Sorted .bam file exists
+			if [[ -n "${INDEX_JOB_SAMPLES}" ]]; then
+				INDEX_JOB_SAMPLES+=","
+			fi
+			INDEX_JOB_SAMPLES+="${ARRAY_ID}"
+		fi
+	fi
+	# Checking if pipeline needs Clair3 step
+	if [[ "${PROCESS_SNP}" == 1 || "${PROCESS_STR}" == 1 || "${PROCESS_CNV}" == 1 ]]; then
+		SAMPLE_CLAIR3_PHASED_SNP_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/clair3/phased_merge_output.vcf.gz"
+		if [[ ! -s "${SAMPLE_CLAIR3_PHASED_SNP_FILE}" ]]; then
+			# Clair3 SNP file does not exist
+			if [[ -n "${CLAIR3_JOB_SAMPLES}" ]]; then
+					CLAIR3_JOB_SAMPLES+=","
+				fi
+				CLAIR3_JOB_SAMPLES+="${ARRAY_ID}"
+		fi
+		if [[ "${PROCESS_STR}" == 1 ]]; then
+			SAMPLE_WHATSHAP_HAPLOTAGGED_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.haplotagged.bam"
+			SAMPLE_HAPLOTAGGED_INDEX_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.haplotagged.bam.bai"
+			SAMPLE_MAHI_MAHI_STR_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/mahi-mahi/${RESULT_FILE_PREFIX}${SAMPLE}.tsv"
+			if [[ ! -s "${SAMPLE_MAHI_MAHI_STR_FILE}" ]]; then
+				# Mahi Mahi .tsv does not exist
+				if [[ ! -s "${SAMPLE_HAPLOTAGGED_INDEX_FILE}" ]]; then
+					# .haplotagged.bam.bai file does not exist
+					if [[ ! -s "${SAMPLE_WHATSHAP_HAPLOTAGGED_FILE}" ]]; then
+						# .haplotagged.bam file does not exist
+						if [[ -n "${WHATSHAP_JOB_SAMPLES}" ]]; then
+							WHATSHAP_JOB_SAMPLES+=","
+						fi
+						WHATSHAP_JOB_SAMPLES+="${ARRAY_ID}"
+						if [[ -n "${HAPLOTAGGED_INDEX_JOB_SAMPLES}" ]]; then
+							HAPLOTAGGED_INDEX_JOB_SAMPLES+=","
+						fi
+						HAPLOTAGGED_INDEX_JOB_SAMPLES+="${ARRAY_ID}"
+						if [[ -n "${MAHI_MAHI_JOB_SAMPLES}" ]]; then
+							MAHI_MAHI_JOB_SAMPLES+=","
+						fi
+						MAHI_MAHI_JOB_SAMPLES+="${ARRAY_ID}"
+					else
+						# .haplotagged.bam file exists
+						if [[ -n "${HAPLOTAGGED_INDEX_JOB_SAMPLES}" ]]; then
+							HAPLOTAGGED_INDEX_JOB_SAMPLES+=","
+						fi
+						HAPLOTAGGED_INDEX_JOB_SAMPLES+="${ARRAY_ID}"
+						if [[ -n "${MAHI_MAHI_JOB_SAMPLES}" ]]; then
+							MAHI_MAHI_JOB_SAMPLES+=","
+						fi
+						MAHI_MAHI_JOB_SAMPLES+="${ARRAY_ID}"
+					fi
+				else
+					# Mahi Mahi .tsv file file
+					if [[ -n "${MAHI_MAHI_JOB_SAMPLES}" ]]; then
+						MAHI_MAHI_JOB_SAMPLES+=","
+					fi
+					MAHI_MAHI_JOB_SAMPLES+="${ARRAY_ID}"
+				fi
+			fi
+		fi
+		if [[ "${PROCESS_CNV}" == 1 ]]; then
+			SAMPLE_MOSDEPTH_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/mosdepth/${RESULT_FILE_PREFIX}${SAMPLE}.regions.bed.gz"
+			SAMPLE_SPECTRE_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/spectre/${SAMPLE}_cnv.bed"
+			if [[ ! -s "${SAMPLE_SPECTRE_FILE}" ]]; then
+				# Spectre CNV file does not exist
+				if [[ ! -s "${SAMPLE_MOSDEPTH_FILE}" ]]; then
+					# MosDepth regions file does not exist
+					if [[ -n "${MOSDEPTH_JOB_SAMPLES}" ]]; then
+						MOSDEPTH_JOB_SAMPLES+=","
+					fi
+					MOSDEPTH_JOB_SAMPLES+="${ARRAY_ID}"
+					if [[ -n "${SPECTRE_JOB_SAMPLES}" ]]; then
+						SPECTRE_JOB_SAMPLES+=","
+					fi
+					SPECTRE_JOB_SAMPLES+="${ARRAY_ID}"
+				else
+					# MosDepth regions file exists
+					if [[ -n "${SPECTRE_JOB_SAMPLES}" ]]; then
+						SPECTRE_JOB_SAMPLES+=","
+					fi
+					SPECTRE_JOB_SAMPLES+="${ARRAY_ID}"
+				fi
+			fi
+		fi
+	fi
+	if [[ "${PROCESS_SV}" == 1 ]]; then
+		SAMPLE_SNIFFLES_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.sniffles.vcf.gz"
+		SAMPLE_NEEDLR_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/needLR/${RESULT_FILE_PREFIX}${SAMPLE}.sniffles_needLR_1kg_v4.0/${RESULT_FILE_PREFIX}${SAMPLE}.sniffles.needLR.4.0_RESULTS.tsv"
+		if [[ ! -s "${SAMPLE_NEEDLR_FILE}" ]]; then
+			# needLR SV file does not exist
+			if [[ ! -s "${SAMPLE_SNIFFLES_FILE}" ]]; then
+				# sniffles file does not exist
+				if [[ -n "${SNIFFLES_JOB_SAMPLES}" ]]; then
+					SNIFFLES_JOB_SAMPLES+=","
+				fi
+				SNIFFLES_JOB_SAMPLES+="${ARRAY_ID}"
+				if [[ -n "${NEEDLR_JOB_SAMPLES}" ]]; then
+					NEEDLR_JOB_SAMPLES+=","
+				fi
+				NEEDLR_JOB_SAMPLES+="${ARRAY_ID}"
+			else
+				# sniffles file exists
+				if [[ -n "${NEEDLR_JOB_SAMPLES}" ]]; then
+					NEEDLR_JOB_SAMPLES+=","
+				fi
+				NEEDLR_JOB_SAMPLES+="${ARRAY_ID}"
+			fi
+		fi
+	fi
+	if [[ "${PROCESS_METHYL}" == 1 ]]; then
+		SAMPLE_MODKIT_PILEUP_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.pileup.methyl.bed.gz"
+		if [[ ! -s "${SAMPLE_MODKIT_PILEUP_FILE}" ]]; then
+			# Modkit pileup file does not exist
+			if [[ -n "${MODKIT_PILEUP_JOB_SAMPLES}" ]]; then
+				MODKIT_PILEUP_JOB_SAMPLES+=","
+			fi
+			MODKIT_PILEUP_JOB_SAMPLES+="${ARRAY_ID}"
+		fi
+	fi
 done
 
-SAMPLE_INDEX_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.aligned.sorted.bam.bai"
-SAMPLE_SORTED_BAM_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.aligned.sorted.bam"
-SAMPLE_ALIGNED_BAM_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.aligned.bam"
-SAMPLE_CLAIR3_PHASED_SNP_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/clair3/phased_merge_output.vcf.gz"
+#echo "ALIGNMENT_JOB_SAMPLES = ${ALIGNMENT_JOB_SAMPLES}"
+#echo "SORT_JOB_SAMPLES = ${SORT_JOB_SAMPLES}"
+#echo "INDEX_JOB_SAMPLES = ${INDEX_JOB_SAMPLES}"
+#if [[ "${PROCESS_SNP}" == 1 || "${PROCESS_STR}" == 1 || "${PROCESS_CNV}" == 1 ]]; then
+#	echo "CLAIR3_JOB_SAMPLES = ${CLAIR3_JOB_SAMPLES}"
+#	if [[ "${PROCESS_STR}" == 1 ]]; then
+#		echo "WHATSHAP_JOB_SAMPLES = ${WHATSHAP_JOB_SAMPLES}"
+#		echo "HAPLOTAGGED_INDEX_JOB_SAMPLES = ${HAPLOTAGGED_INDEX_JOB_SAMPLES}"
+#		echo "MAHI_MAHI_JOB_SAMPLES = ${MAHI_MAHI_JOB_SAMPLES}"
+#	fi
+#	if [[ "${PROCESS_CNV}" == 1 ]]; then
+#		echo "MOSDEPTH_JOB_SAMPLES = ${MOSDEPTH_JOB_SAMPLES}"
+#		echo "SPECTRE_JOB_SAMPLES = ${SPECTRE_JOB_SAMPLES}"
+#	fi
+#fi
+#if [[ "${PROCESS_SV}" == 1 ]]; then
+#	echo "SNIFFLES_JOB_SAMPLES = ${SNIFFLES_JOB_SAMPLES}"
+#	echo "NEEDLR_JOB_SAMPLES = ${NEEDLR_JOB_SAMPLES}"
+#fi
+#if [[ "${PROCESS_METHYL}" == 1 ]]; then
+#	echo "MODKIT_PILEUP_JOB_SAMPLES = ${MODKIT_PILEUP_JOB_SAMPLES}"
+#fi
 
 ALIGNMENT_JOB_ID=""
 SORT_JOB_ID=""
 INDEX_JOB_ID=""
 CLAIR_JOB_ID=""
+WHATSHAP_JOB_ID=""
+HAPLOTAGGED_INDEX_JOB_ID=""
+MAHI_MAHI_JOB_ID=""
+MOSDEPTH_JOB_ID=""
+SPECTRE_JOB_ID=""
+SNIFFLES_JOB_ID=""
+NEEDLR_JOB_ID=""
+MODKIT_JOB_ID=""
 
-# Align .pod5 files, sort, and align (required by all sub-tasks)
-if [[ ! -s "${SAMPLE_INDEX_FILE}" ]]; then
-	echo "Index file not properly generated"
-	if [[ ! -s "${SAMPLE_SORTED_BAM_FILE}" ]]; then
-		echo "Sorted .bam file not properly generated"
-		if [[ ! -s "${SAMPLE_ALIGNED_BAM_FILE}" ]]; then
-			echo "Aligned .bam file not properly generated"
-			echo "Run Dorado Basecaller alignment job"
-			ALIGNMENT_JOB_ID=$(submit_slurm_job $DORADO_SCRIPT $SAMPLE_IDS $SLURM_GPU_PARTITIONS)
-			echo "Run Samtools sort job"
-			SORT_JOB_ID=$(submit_slurm_job $SAMTOOLS_SORT_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $ALIGNMENT_JOB_ID)
-			echo "Run Samtools index job"
-			INDEX_JOB_ID=$(submit_slurm_job $SAMTOOLS_INDEX_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $SORT_JOB_ID)
-		else
-			echo "Run Samtools sort job"
-			SORT_JOB_ID=$(submit_slurm_job $SAMTOOLS_SORT_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $ALIGNMENT_JOB_ID)
-			echo "Run Samtools index job"
-			INDEX_JOB_ID=$(submit_slurm_job $SAMTOOLS_INDEX_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $SORT_JOB_ID)
-		fi
+if [[ -n "${ALIGNMENT_JOB_SAMPLES}" ]]; then
+	echo "Running Dorado basecaller alignment job on sample array indices: ${ALIGNMENT_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		ALIGNMENT_JOB_ID=$(submit_slurm_job $DORADO_SCRIPT $ALIGNMENT_JOB_SAMPLES $SLURM_GPU_PARTITIONS)
 	else
-		echo "Run Samtools index job"
-			INDEX_JOB_ID=$(submit_slurm_job $SAMTOOLS_INDEX_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $SORT_JOB_ID)
+		echo "ALIGNMENT_JOB_ID=\$(submit_slurm_job $DORADO_SCRIPT $ALIGNMENT_JOB_SAMPLES $SLURM_GPU_PARTITIONS)"
 	fi
 fi
-
-# SNPs are required by SNP, STR, and CNV pipelines
-if [[ "${PROCESS_SNP}" == 1 || "${PROCESS_STR}" == 1 || "${PROCESS_CNV}" == 1 ]]; then
-	if [[ ! -s "${SAMPLE_CLAIR3_PHASED_SNP_FILE}" ]]; then
-		echo "Run Clair3 variant caller && phasing job"
-		CLAIR_JOB_ID=$(submit_slurm_job $CLAIR3_SCRIPT $SAMPLE_IDS $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)
-	fi
-	if [[ "${PROCESS_STR}" == 1 ]]; then
-		echo "Run WhatsHap haplotag job"
-		WHATSHAP_JOB_ID=$(submit_slurm_job $WHATSHAP_SCRIPT $SAMPLE_IDS $SLURM_GPU_PARTITIONS $CLAIR_JOB_ID)
-		echo "Run Samtools haplotagged index job"
-		HAPLOTAGGED_INDEX_JOB_ID=$(submit_slurm_job $SAMTOOLS_INDEX_HAPLOTAGGED_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $WHATSHAP_JOB_ID)
-		echo "Run Mahi Mahi job"
-		MAHI_MAHI_JOB_ID=$(submit_slurm_job $MAHIMAHI_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $HAPLOTAGGED_INDEX_JOB_ID)
-	fi
-	if [[ "${PROCESS_CNV}" == 1 ]]; then
-		echo "Run MosDepth job"
-		MOSDEPTH_JOB_ID=$(submit_slurm_job $MOSDEPTH_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $INDEX_JOB_ID)
-		echo "Run Spectre job"
-		SPECTRE_JOB_ID=$(submit_slurm_job $SPECTRE_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $CLAIR_JOB_ID $MOSDEPTH_JOB_ID)
+if [[ -n "${SORT_JOB_SAMPLES}" ]]; then
+	echo "Running samtools sort job on sample array indices: ${SORT_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		SORT_JOB_ID=$(submit_slurm_job $SAMTOOLS_SORT_SCRIPT $SORT_JOB_SAMPLES $SLURM_PARTITIONS $ALIGNMENT_JOB_ID)
+	else
+		echo "SORT_JOB_ID=\$(submit_slurm_job $SAMTOOLS_SORT_SCRIPT $SORT_JOB_SAMPLES $SLURM_PARTITIONS $ALIGNMENT_JOB_ID)"
 	fi
 fi
-if [[ "${PROCESS_SV}" == 1 ]]; then
-	echo "Run Sniffles job"
-	SNIFFLES_JOB_ID=$(submit_slurm_job $SNIFFLES_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $INDEX_JOB_ID)
-	echo "Run needLR job"
-	NEEDLR_JOB_ID=$(submit_slurm_job $NEEDLR_SCRIPT $SAMPLE_IDS $SLURM_LONG_PARTITIONS $SNIFFLES_JOB_ID)
+if [[ -n "${INDEX_JOB_SAMPLES}" ]]; then
+	echo "Running samtools index job on sample array indices: ${INDEX_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		INDEX_JOB_ID=$(submit_slurm_job $SAMTOOLS_INDEX_SCRIPT $INDEX_JOB_SAMPLES $SLURM_PARTITIONS $SORT_JOB_ID)
+	else
+		echo "INDEX_JOB_ID=\$(submit_slurm_job $SAMTOOLS_INDEX_SCRIPT $INDEX_JOB_SAMPLES $SLURM_PARTITIONS $SORT_JOB_ID)"
+	fi
 fi
-if [[ "${PROCESS_METHYL}" == 1 ]]; then
-	echo "Run ModKit pileup job"
-	MODKIT_JOB_ID=$(submit_slurm_job $MODKIT_PILEUP_SCRIPT $SAMPLE_IDS $SLURM_PARTITIONS $INDEX_JOB_ID)
+if [[ -n "${CLAIR3_JOB_SAMPLES}" ]]; then
+	echo "Running Clair3 SNP calling job on sample array indices: ${CLAIR3_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		CLAIR_JOB_ID=$(submit_slurm_job $CLAIR3_SCRIPT $CLAIR3_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)
+	else
+		echo "CLAIR_JOB_ID=\$(submit_slurm_job $CLAIR3_SCRIPT $CLAIR3_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)"
+	fi
+fi
+if [[ -n "${WHATSHAP_JOB_SAMPLES}" ]]; then
+	echo "Running WhatsHap haplotagging job on sample array indices: ${WHATSHAP_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		WHATSHAP_JOB_ID=$(submit_slurm_job $WHATSHAP_SCRIPT $WHATSHAP_JOB_SAMPLES $SLURM_GPU_PARTITIONS $CLAIR_JOB_ID)
+	else
+		echo "WHATSHAP_JOB_ID=\$(submit_slurm_job $WHATSHAP_SCRIPT $WHATSHAP_JOB_SAMPLES $SLURM_GPU_PARTITIONS $CLAIR_JOB_ID)"
+	fi
+fi
+if [[ -n "${HAPLOTAGGED_INDEX_JOB_SAMPLES}" ]]; then
+	echo "Running haplotagged bam indexing job on sample array indices: ${HAPLOTAGGED_INDEX_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		HAPLOTAGGED_INDEX_JOB_ID=$(submit_slurm_job $SAMTOOLS_INDEX_HAPLOTAGGED_SCRIPT $HAPLOTAGGED_INDEX_JOB_SAMPLES $SLURM_PARTITIONS $WHATSHAP_JOB_ID)
+	else
+		echo "HAPLOTAGGED_INDEX_JOB_ID=\$(submit_slurm_job $SAMTOOLS_INDEX_HAPLOTAGGED_SCRIPT $HAPLOTAGGED_INDEX_JOB_SAMPLES $SLURM_PARTITIONS $WHATSHAP_JOB_ID)"
+	fi
+fi
+if [[ -n "${MAHI_MAHI_JOB_SAMPLES}" ]]; then
+	echo "Running Mahi Mahi STR job on sample array indices: ${MAHI_MAHI_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		MAHI_MAHI_JOB_ID=$(submit_slurm_job $MAHIMAHI_SCRIPT $MAHI_MAHI_JOB_SAMPLES $SLURM_PARTITIONS $HAPLOTAGGED_INDEX_JOB_ID)
+	else
+		echo "MAHI_MAHI_JOB_ID=\$(submit_slurm_job $MAHIMAHI_SCRIPT $MAHI_MAHI_JOB_SAMPLES $SLURM_PARTITIONS $HAPLOTAGGED_INDEX_JOB_ID)"
+	fi
+fi
+if [[ -n "${MOSDEPTH_JOB_SAMPLES}" ]]; then
+	echo "Running MosDepth job on sample array indices: ${MOSDEPTH_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		MOSDEPTH_JOB_ID=$(submit_slurm_job $MOSDEPTH_SCRIPT $MOSDEPTH_JOB_SAMPLES $SLURM_PARTITIONS $INDEX_JOB_ID)
+	else
+		echo "MOSDEPTH_JOB_ID=\$(submit_slurm_job $MOSDEPTH_SCRIPT $MOSDEPTH_JOB_SAMPLES $SLURM_PARTITIONS $INDEX_JOB_ID)"
+	fi
+fi
+if [[ -n "${SPECTRE_JOB_SAMPLES}" ]]; then
+	echo "Running Spectre job on sample array indices: ${SPECTRE_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		SPECTRE_JOB_ID=$(submit_slurm_job $SPECTRE_SCRIPT $SPECTRE_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR_JOB_ID $MOSDEPTH_JOB_ID)
+	else
+		echo "SPECTRE_JOB_ID=\$(submit_slurm_job $SPECTRE_SCRIPT $SPECTRE_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR_JOB_ID $MOSDEPTH_JOB_ID)"
+	fi
+fi
+if [[ -n "${SNIFFLES_JOB_SAMPLES}" ]]; then
+	echo "Running sniffles job on sample array indices: ${SNIFFLES_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		SNIFFLES_JOB_ID=$(submit_slurm_job $SNIFFLES_SCRIPT $SNIFFLES_JOB_SAMPLES $SLURM_PARTITIONS $INDEX_JOB_ID)
+	else
+		echo "SNIFFLES_JOB_ID=\$(submit_slurm_job $SNIFFLES_SCRIPT $SNIFFLES_JOB_SAMPLES $SLURM_PARTITIONS $INDEX_JOB_ID)"
+	fi
+fi
+if [[ -n "${NEEDLR_JOB_SAMPLES}" ]]; then
+	echo "Running needLR job on sample array indices: ${NEEDLR_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		NEEDLR_JOB_ID=$(submit_slurm_job $NEEDLR_SCRIPT $NEEDLR_JOB_SAMPLES $SLURM_LONG_PARTITIONS $SNIFFLES_JOB_ID)
+	else
+		echo "NEEDLR_JOB_ID=\$(submit_slurm_job $NEEDLR_SCRIPT $NEEDLR_JOB_SAMPLES $SLURM_LONG_PARTITIONS $SNIFFLES_JOB_ID)"
+	fi
+fi
+if [[ -n "${MODKIT_PILEUP_JOB_SAMPLES}" ]]; then
+	echo "Running Modkit pileup job on sample array indices: ${MODKIT_PILEUP_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		MODKIT_JOB_ID=$(submit_slurm_job $MODKIT_PILEUP_SCRIPT $MODKIT_PILEUP_JOB_SAMPLES $SLURM_PARTITIONS $INDEX_JOB_ID)
+	else
+		echo "MODKIT_JOB_ID=\$(submit_slurm_job $MODKIT_PILEUP_SCRIPT $MODKIT_PILEUP_JOB_SAMPLES $SLURM_PARTITIONS $INDEX_JOB_ID)"
+	fi
 fi

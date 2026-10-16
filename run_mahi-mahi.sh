@@ -32,11 +32,11 @@ SAMPLE=$(awk -v ArrayTaskID=$SLURM_ARRAY_TASK_ID '$1==ArrayTaskID {print $2}' $S
 SAMPLE_SEX=$(awk -v ArrayTaskID=$SLURM_ARRAY_TASK_ID '$1==ArrayTaskID {print $4}' $SLURM_ARRAY_FILE)
 SAMPLE_RESULTS_DIRECTORY=${RESULTS_DIRECTORY}/${SAMPLE}
 
-MAHI_MAHI_WHL=${SQFS_IMAGES}/mahi_mahi-0.6.0-py3-none-any.whl
+MAHI_MAHI_WHL=${IMAGES_DIRECTORY}/mahi_mahi-0.6.0-py3-none-any.whl
 
 # Run the container
 srun -N${SLURM_NNODES} --ntasks=${SLURM_NPROCS} --cpus-per-task=${SLURM_CPUS_PER_TASK} \
-	--output=${SAMPLE_RESULTS_DIR}/logs/mahi-mahi_%a_%A.out \
+	--output=${SAMPLE_RESULTS_DIRECTORY}/logs/mahi-mahi_%a_%A.out \
 	--container-writable --container-image=${CONTAINER_IMAGE} --container-mounts=${CONTAINER_MOUNTS} \
 		bash -c "pip install -v ${MAHI_MAHI_WHL} && \
 			/usr/local/bin/mahi-mahi \
