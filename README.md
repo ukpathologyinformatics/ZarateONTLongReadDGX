@@ -82,6 +82,7 @@ Running the pipeline for a sample is initiated using the `process_zarate_samples
 		-p <task[,task...]> : Comma-separated task list (available: snp/snv, sv, str, cnv, methyl, all)
 	Optional Parameters:
 		-n : Perform a dry run of the script to see what changes and jobs will be run
+		-v : Run with verbose logging
 	
 	e.g. ./process_zarate_samples.sh -s 0002 -p snp,cnv,methyl
 
