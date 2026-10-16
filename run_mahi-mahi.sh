@@ -40,6 +40,7 @@ srun -N${SLURM_NNODES} --ntasks=${SLURM_NPROCS} --cpus-per-task=${SLURM_CPUS_PER
 	--container-writable --container-image=${CONTAINER_IMAGE} --container-mounts=${CONTAINER_MOUNTS} \
 		bash -c "pip install -v ${MAHI_MAHI_WHL} && \
 			/usr/local/bin/mahi-mahi \
+				--set generate_motif_plots=true \
         		--bam ${SAMPLE_RESULTS_DIRECTORY}/${RESULT_FILE_PREFIX}${SAMPLE}.haplotagged.bam \
         		--ref ${REFERENCE_GENOME_FILE} \
         		--sex ${SAMPLE_SEX} \
