@@ -4,13 +4,13 @@
 #	Copyright (C) 2026 Caylin Hickey and Dr. Justin Miller
 #
 #	This script launches a pipeline to process long read sequencing data from the Nanopore
-#	Sequencing Platform that process SNP/SNV, STR, SV, and Methylation results
+#	Sequencing Platform that process SNP/SNV, STR, SV, CNV, and Methylation results
 
 # Pull in configuration environment variables
 source .env
 
 usage() {
-	echo "Usage: $0 -s <sample_id(s)> -p <[snp|snv|sv|str|cnv|methyl|all]> -o <output_folder>"
+	echo "Usage: $0 [-n] [-v] -s <sample_id(s)> -p <[snp|snv|sv|str|cnv|methyl|all]>"
 }
 
 show_help() {
@@ -20,7 +20,7 @@ show_help() {
 	echo "	-p <task[,task...]> : Comma-separated task list (available: snp/snv, sv, str, cnv, methyl, all)" 1>&2
 	echo "Optional Parameters:" 1>&2
 	echo "	-n : Perform a dry run of the script to see what changes and jobs will be run" 1>&2
-	#echo "	-o <output_folder> : Overrides the root output folder for processing results" 1>&2
+	echo "	-v : Run with verbose logging" 1>&2
 }
 
 check_args() {
@@ -71,7 +71,9 @@ submit_slurm_job() {
 	OUTPUT="--output=${SLURM_LOGS_DIRECTORY}/slurm-%A_%a.out"
 	export SCRIPT_DIRECTORY
 	EXPORTS="--export=SCRIPT_DIRECTORY"
-	# printf "sbatch --array ${SAMPLES} ${PARTITIONS} ${ACCOUNT} ${DEPENDENCIES} ${EXPORTS} ${OUTPUT} ${SCRIPT}\n" >&2
+	if [[ $VERBOSE == 1 ]]; then
+		printf "SBATCH Command: sbatch --array ${SAMPLES} ${PARTITIONS} ${ACCOUNT} ${DEPENDENCIES} ${EXPORTS} ${OUTPUT} ${SCRIPT}\n" >&2
+	fi
 	echo $(sbatch --array ${SAMPLES} ${PARTITIONS} ${ACCOUNT} ${DEPENDENCIES} ${EXPORTS} ${OUTPUT} ${SCRIPT} | awk '{ print $4 }')
 }
 
@@ -82,10 +84,10 @@ PROCESS_SV=0
 PROCESS_STR=0
 PROCESS_CNV=0
 PROCESS_METHYL=0
-OUTPUT_DIR=""
 DRYRUN=0
+VERBOSE=0
 
-while getopts ":s:p:o:hn" o; do
+while getopts ":s:p:o:hnv" o; do
 	case "${o}" in
 		s)
 			ORIGINAL_SAMPLE_IDS=$OPTARG
@@ -134,8 +136,8 @@ while getopts ":s:p:o:hn" o; do
 				fi
 			done
 		;;
-		o) OUTPUT_DIR="${OPTARG}" ;;
 		n) DRYRUN=1 ;;
+		v) VERBOSE=1 ;;
 		h)
             show_help
             exit 1
@@ -149,11 +151,13 @@ if [[ $DRYRUN == 1 ]]; then
 	echo "Performing a dry run, no changes will be made or Slurm jobs run."
 fi
 
-#echo "PROCESS_SNP = ${PROCESS_SNP}"
-#echo "PROCESS_SV = ${PROCESS_SV}"
-#echo "PROCESS_STR = ${PROCESS_STR}"
-#echo "PROCESS_CNV = ${PROCESS_CNV}"
-#echo "PROCESS_METHYL = ${PROCESS_METHYL}"
+if [[ $VERBOSE == 1 ]]; then
+	echo "PROCESS_SNP = ${PROCESS_SNP}"
+	echo "PROCESS_SV = ${PROCESS_SV}"
+	echo "PROCESS_STR = ${PROCESS_STR}"
+	echo "PROCESS_CNV = ${PROCESS_CNV}"
+	echo "PROCESS_METHYL = ${PROCESS_METHYL}"
+fi
 
 ALIGNMENT_JOB_SAMPLES=""
 SORT_JOB_SAMPLES=""
@@ -185,7 +189,7 @@ for i in "${!SAMPLES[@]}"; do
 	ARRAY_ID="${ARRAY_IDS[$i]}"
 	# Creating output directories
 	if [[ ! -d "${RESULTS_DIRECTORY}/${SAMPLE}" ]]; then
-		echo "Creating output directories for sample: ${SAMPLE}"
+		echo "Creating output directories for sample [${SAMPLE}]: ${RESULTS_DIRECTORY}/${SAMPLE} and ${RESULTS_DIRECTORY}/${SAMPLE}/logs"
 		if [[ $DRYRUN == 0 ]]; then
 			mkdir -p ${RESULTS_DIRECTORY}/${SAMPLE}/logs
 		fi
@@ -344,28 +348,30 @@ for i in "${!SAMPLES[@]}"; do
 	fi
 done
 
-#echo "ALIGNMENT_JOB_SAMPLES = ${ALIGNMENT_JOB_SAMPLES}"
-#echo "SORT_JOB_SAMPLES = ${SORT_JOB_SAMPLES}"
-#echo "INDEX_JOB_SAMPLES = ${INDEX_JOB_SAMPLES}"
-#if [[ "${PROCESS_SNP}" == 1 || "${PROCESS_STR}" == 1 || "${PROCESS_CNV}" == 1 ]]; then
-#	echo "CLAIR3_JOB_SAMPLES = ${CLAIR3_JOB_SAMPLES}"
-#	if [[ "${PROCESS_STR}" == 1 ]]; then
-#		echo "WHATSHAP_JOB_SAMPLES = ${WHATSHAP_JOB_SAMPLES}"
-#		echo "HAPLOTAGGED_INDEX_JOB_SAMPLES = ${HAPLOTAGGED_INDEX_JOB_SAMPLES}"
-#		echo "MAHI_MAHI_JOB_SAMPLES = ${MAHI_MAHI_JOB_SAMPLES}"
-#	fi
-#	if [[ "${PROCESS_CNV}" == 1 ]]; then
-#		echo "MOSDEPTH_JOB_SAMPLES = ${MOSDEPTH_JOB_SAMPLES}"
-#		echo "SPECTRE_JOB_SAMPLES = ${SPECTRE_JOB_SAMPLES}"
-#	fi
-#fi
-#if [[ "${PROCESS_SV}" == 1 ]]; then
-#	echo "SNIFFLES_JOB_SAMPLES = ${SNIFFLES_JOB_SAMPLES}"
-#	echo "NEEDLR_JOB_SAMPLES = ${NEEDLR_JOB_SAMPLES}"
-#fi
-#if [[ "${PROCESS_METHYL}" == 1 ]]; then
-#	echo "MODKIT_PILEUP_JOB_SAMPLES = ${MODKIT_PILEUP_JOB_SAMPLES}"
-#fi
+if [[ $VERBOSE == 1 ]]; then
+	echo "ALIGNMENT_JOB_SAMPLES = ${ALIGNMENT_JOB_SAMPLES}"
+	echo "SORT_JOB_SAMPLES = ${SORT_JOB_SAMPLES}"
+	echo "INDEX_JOB_SAMPLES = ${INDEX_JOB_SAMPLES}"
+	if [[ "${PROCESS_SNP}" == 1 || "${PROCESS_STR}" == 1 || "${PROCESS_CNV}" == 1 ]]; then
+		echo "CLAIR3_JOB_SAMPLES = ${CLAIR3_JOB_SAMPLES}"
+		if [[ "${PROCESS_STR}" == 1 ]]; then
+			echo "WHATSHAP_JOB_SAMPLES = ${WHATSHAP_JOB_SAMPLES}"
+			echo "HAPLOTAGGED_INDEX_JOB_SAMPLES = ${HAPLOTAGGED_INDEX_JOB_SAMPLES}"
+			echo "MAHI_MAHI_JOB_SAMPLES = ${MAHI_MAHI_JOB_SAMPLES}"
+		fi
+		if [[ "${PROCESS_CNV}" == 1 ]]; then
+			echo "MOSDEPTH_JOB_SAMPLES = ${MOSDEPTH_JOB_SAMPLES}"
+			echo "SPECTRE_JOB_SAMPLES = ${SPECTRE_JOB_SAMPLES}"
+		fi
+	fi
+	if [[ "${PROCESS_SV}" == 1 ]]; then
+		echo "SNIFFLES_JOB_SAMPLES = ${SNIFFLES_JOB_SAMPLES}"
+		echo "NEEDLR_JOB_SAMPLES = ${NEEDLR_JOB_SAMPLES}"
+	fi
+	if [[ "${PROCESS_METHYL}" == 1 ]]; then
+		echo "MODKIT_PILEUP_JOB_SAMPLES = ${MODKIT_PILEUP_JOB_SAMPLES}"
+	fi
+fi
 
 ALIGNMENT_JOB_ID=""
 SORT_JOB_ID=""
