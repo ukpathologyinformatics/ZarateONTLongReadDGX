@@ -85,6 +85,12 @@ Running the pipeline for a sample is initiated using the `process_zarate_samples
 
 This script will establish a dependency tree of Slurm jobs to process all pipeline tasks as efficiently as possible.
 
+#### Manually using the scripts
+
+The various task SBATCH scripts can be run manually from the directory with your `.env` file, but you may need to provide some parameters. An example of manually running a job:
+
+	sbatch --array <sample.txt_index_#> [--account <slurm_account>] [--partition <slurm_partition(s)>] run_modkit_pileup.sh
+
 ## Current Versions
 * Dorado - v2.1.1
 * samtools - v1.24

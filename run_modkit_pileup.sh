@@ -38,5 +38,6 @@ srun -N${SLURM_NNODES} --ntasks=${SLURM_NPROCS} --cpus-per-task=${SLURM_CPUS_PER
         /opt/custflow/epi2meuser/conda/bin/modkit pileup \
 			--threads ${SLURM_CPUS_PER_TASK} \
 			--log-filepath ${SAMPLE_RESULTS_DIRECTORY}/logs/${RESULT_FILE_PREFIX}${SAMPLE}.pileup.methyl.log \
+			--bgzf \
 			${SAMPLE_RESULTS_DIRECTORY}/${RESULT_FILE_PREFIX}${SAMPLE}.aligned.sorted.bam \
 			${SAMPLE_RESULTS_DIRECTORY}/${RESULT_FILE_PREFIX}${SAMPLE}.pileup.methyl.bed.gz
