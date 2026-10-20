@@ -23,12 +23,12 @@ The following tools are employed in this analysis:
 * [samtools](https://github.com/samtools/samtools)
 * [Clair3](https://github.com/HKU-BAL/clair3)
 * [WhatsHap](https://github.com/whatshap/whatshap)
+* [Nanopore Mahi-mahi](https://github.com/nanoporetech/mahi-mahi)
+* [Sniffles](https://github.com/fritzsedlazeck/sniffles)
 * [needLR](https://github.com/millerlaboratory/needLR)
 * [mosdepth](https://github.com/brentp/mosdepth)
 * [Nanopore Spectre (fork)](https://github.com/nanoporetech/ont-spectre)
 * [Nanopore Modkit](https://github.com/nanoporetech/modkit)
-
-_NOTE: `mahi-mahi` is a beta project from Nanopore_
 
 ## Pipeline Flow
                       ONT Sequencing (.pod5)
@@ -99,8 +99,12 @@ The various task SBATCH scripts can be run manually from the directory with your
 * samtools - v1.24
 * Clair3 - v2.0.4
 * WhatsHap - v2.8
+* Mahi-mahi - v1.0.0
 * sniffles - v2.8.0
 * needLR - v4.1
 * mosdepth - v0.3.14
 * Spectre - v0.3.2
 * ModKit - v0.6.3
+
+## To Do List
+* Migrate program parameters (at least the static ones) to the .env file to allow a single source of record of a pipeline setup (e.g. `MAHI_MAHI_PARAMS="--set generate_motif_plots=true --loci hg38"`)
