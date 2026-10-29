@@ -42,7 +42,7 @@ srun -N${SLURM_NNODES} --ntasks=${SLURM_NPROCS} --gpus-per-task=${SLURM_GPUS_PER
     		--threads=${SLURM_CPUS_PER_GPU} \
     		--platform=ont \
     		--enable_dwell_time \
-    		--model_path=/opt/models/${CLAIR3_MODEL} \
+    		--model_path=/opt/models/${CLAIR3_MV_MODEL} \
     		--output=${SAMPLE_RESULTS_DIRECTORY}/clair3 \
     		--use_gpu \
     		--use_whatshap_for_final_output_phasing"

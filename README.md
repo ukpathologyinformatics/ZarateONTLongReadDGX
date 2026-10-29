@@ -20,6 +20,7 @@ This Slurm-based processing pipeline leverages the UKIT DGX GPU Compute Cluster 
 
 The following tools are employed in this analysis:
 * [Nanopore Dorado](https://github.com/nanoporetech/dorado/)
+* [Minimap2](https://github.com/lh3/minimap2)
 * [samtools](https://github.com/samtools/samtools)
 * [Clair3](https://github.com/HKU-BAL/clair3)
 * [WhatsHap](https://github.com/whatshap/whatshap)
@@ -31,22 +32,25 @@ The following tools are employed in this analysis:
 * [Nanopore Modkit](https://github.com/nanoporetech/modkit)
 
 ## Pipeline Flow
-                      ONT Sequencing (.pod5)
-                                |
-                         Dorado basecaller
-                                |
-             ------------samtools sort/index-------------
-            |             |              |               |
-         clair3        sniffles       mosdepth         modkit
-       <phase,SNP>        |              |         <Methylation>
-            |           needLR        spectre
-         whatshap        <SV>          <CNV>
-	    <haplotag>
-            |
-	  samtools index
-	        |
-        mahi-mahi
-          <STR>
+                      ONT Sequencing (.pod5) | ONT Sequencing (.fastq.gz)
+                                |                       |
+                         Dorado basecaller           Minimap2
+                                 |						|
+								 |  			  samtools view
+								  \____________________/
+									        |
+		               ------------samtools sort/index-------------
+		              |             |              |               |
+		           clair3        sniffles       mosdepth         modkit
+		         <phase,SNP>        |              |         <Methylation>
+		              |           needLR        spectre
+		           whatshap        <SV>          <CNV>
+		  	      <haplotag>
+		              |
+		  	    samtools index
+		    	      |
+		          mahi-mahi
+		            <STR>
 
 ## Usage
 
@@ -96,6 +100,7 @@ The various task SBATCH scripts can be run manually from the directory with your
 
 ## Current Versions
 * Dorado - v2.1.1
+* Minimap2 - v2.31
 * samtools - v1.24
 * Clair3 - v2.0.4
 * WhatsHap - v2.8

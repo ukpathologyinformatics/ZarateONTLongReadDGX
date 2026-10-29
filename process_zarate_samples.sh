@@ -20,6 +20,7 @@ show_help() {
 	echo "	-p <task[,task...]> : Comma-separated task list (available: snp/snv, sv, str, cnv, methyl, all)" 1>&2
 	echo "Optional Parameters:" 1>&2
 	echo "	-n : Perform a dry run of the script to see what changes and jobs will be run" 1>&2
+	echo "  -f : Allow fastq_pass to be used if pod5 directory does not exist" 1>&2
 	echo "	-v : Run with verbose logging" 1>&2
 }
 
@@ -37,17 +38,23 @@ check_args() {
 }
 
 check_sample() {
-	POD5_SUB_DIRECTORY=$(grep $1 $SLURM_ARRAY_FILE | awk '{ print $3 }')
-	POD5_DIRECTORY="${RUNS_DIRECTORY}/${POD5_SUB_DIRECTORY}"
-	if [[ -z "${POD5_SUB_DIRECTORY}" ]]; then
+	DATA_SUB_DIRECTORY=$(grep $1 $SLURM_ARRAY_FILE | awk '{ print $3 }')
+	POD5_DIRECTORY="${RUNS_DIRECTORY}/${DATA_SUB_DIRECTORY}/pod5"
+	FASTQ_DIRECTORY="${RUNS_DIRECTORY}/${DATA_SUB_DIRECTORY}/fastq_pass"
+	if [[ -z "${POD5_DIRECTORY}" && -z "${FASTQ_DIRECTORY}" ]]; then
 		printf "WARNING: sample ${1} not found in records, skipping.\n" >&2
-		echo 0
+		echo ""
 	else
 		if [[ ! -d $POD5_DIRECTORY ]]; then
-			printf "WARNING: sample ${1} pod5 folder [${POD5_DIRECTORY}] does not exist, skipping.\n" >&2
-			echo 0
+			if [[ $ALLOW_FASTQ == 1 ]]; then
+				printf "INFO: sample ${1} pod5 directory [${POD5_DIRECTORY}] does not exist, using fastq_pass directory [${FASTQ_DIRECTORY}] instead.\n" >&2 
+				echo $FASTQ_DIRECTORY
+			else
+				printf "WARNING: sample ${1} pod5 directory [${POD5_DIRECTORY}] does not exist, skipping.\n" >&2
+				echo ""
+			fi
 		else
-			echo 1
+			echo $POD5_DIRECTORY
 		fi
 	fi
 }
@@ -84,10 +91,11 @@ PROCESS_SV=0
 PROCESS_STR=0
 PROCESS_CNV=0
 PROCESS_METHYL=0
+ALLOW_FASTQ=0
 DRYRUN=0
 VERBOSE=0
 
-while getopts ":s:p:o:hnv" o; do
+while getopts ":s:p:o:fhnv" o; do
 	case "${o}" in
 		s)
 			ORIGINAL_SAMPLE_IDS=$OPTARG
@@ -136,6 +144,7 @@ while getopts ":s:p:o:hnv" o; do
 				fi
 			done
 		;;
+		f) ALLOW_FASTQ=1 ;;
 		n) DRYRUN=1 ;;
 		v) VERBOSE=1 ;;
 		h)
@@ -159,10 +168,12 @@ if [[ $VERBOSE == 1 ]]; then
 	echo "PROCESS_METHYL = ${PROCESS_METHYL}"
 fi
 
-ALIGNMENT_JOB_SAMPLES=""
+POD5_ALIGNMENT_JOB_SAMPLES=""
+FASTQ_ALIGNMENT_JOB_SAMPLES=""
 SORT_JOB_SAMPLES=""
 INDEX_JOB_SAMPLES=""
 
+CLAIR3_MV_JOB_SAMPLES=""
 CLAIR3_JOB_SAMPLES=""
 
 WHATSHAP_JOB_SAMPLES=""
@@ -182,8 +193,8 @@ IFS=',' read -ra SAMPLES <<< "$ORIGINAL_SAMPLE_IDS"
 IFS=',' read -ra ARRAY_IDS <<< "$SAMPLE_IDS"
 for i in "${!SAMPLES[@]}"; do
 	SAMPLE="${SAMPLES[$i]}"
-	SAMPLE_EXISTS=$(check_sample $SAMPLE)
-	if [[ $SAMPLE_EXISTS == 0 ]]; then
+	SAMPLE_DATA_FILES=$(check_sample $SAMPLE)
+	if [[ -z $SAMPLE_DATA_FILES ]]; then
 		continue
 	fi
 	ARRAY_ID="${ARRAY_IDS[$i]}"
@@ -204,10 +215,17 @@ for i in "${!SAMPLES[@]}"; do
 			# Sorted .bam file does not exist
 			if [[ ! -s "${SAMPLE_ALIGNED_BAM_FILE}" ]]; then
 				# Aligned .bam file does not exist
-				if [[ -n "${ALIGNMENT_JOB_SAMPLES}" ]]; then
-					ALIGNMENT_JOB_SAMPLES+=","
+				if [[ "${SAMPLE_DATA_FILES}" == *pod5 ]]; then
+					if [[ -n "${POD5_ALIGNMENT_JOB_SAMPLES}" ]]; then
+						POD5_ALIGNMENT_JOB_SAMPLES+=","
+					fi
+					POD5_ALIGNMENT_JOB_SAMPLES+="${ARRAY_ID}"
+				else
+					if [[ -n "${FASTQ_ALIGNMENT_JOB_SAMPLES}" ]]; then
+						FASTQ_ALIGNMENT_JOB_SAMPLES+=","
+					fi
+					FASTQ_ALIGNMENT_JOB_SAMPLES+="${ARRAY_ID}"
 				fi
-				ALIGNMENT_JOB_SAMPLES+="${ARRAY_ID}"
 				if [[ -n "${SORT_JOB_SAMPLES}" ]]; then
 					SORT_JOB_SAMPLES+=","
 				fi
@@ -240,10 +258,17 @@ for i in "${!SAMPLES[@]}"; do
 		SAMPLE_CLAIR3_PHASED_SNP_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/clair3/phased_merge_output.vcf.gz"
 		if [[ ! -s "${SAMPLE_CLAIR3_PHASED_SNP_FILE}" ]]; then
 			# Clair3 SNP file does not exist
-			if [[ -n "${CLAIR3_JOB_SAMPLES}" ]]; then
+			if [[ "${SAMPLE_DATA_FILES}" == *pod5 ]]; then
+				if [[ -n "${CLAIR3_MV_JOB_SAMPLES}" ]]; then
+					CLAIR3_MV_JOB_SAMPLES+=","
+				fi
+				CLAIR3_MV_JOB_SAMPLES+="${ARRAY_ID}"
+			else
+				if [[ -n "${CLAIR3_JOB_SAMPLES}" ]]; then
 					CLAIR3_JOB_SAMPLES+=","
 				fi
 				CLAIR3_JOB_SAMPLES+="${ARRAY_ID}"
+			fi
 		fi
 		if [[ "${PROCESS_STR}" == 1 ]]; then
 			SAMPLE_WHATSHAP_HAPLOTAGGED_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.haplotagged.bam"
@@ -340,19 +365,25 @@ for i in "${!SAMPLES[@]}"; do
 		SAMPLE_MODKIT_PILEUP_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/${RESULT_FILE_PREFIX}${SAMPLE}.pileup.methyl.bed.gz"
 		if [[ ! -s "${SAMPLE_MODKIT_PILEUP_FILE}" ]]; then
 			# Modkit pileup file does not exist
-			if [[ -n "${MODKIT_PILEUP_JOB_SAMPLES}" ]]; then
-				MODKIT_PILEUP_JOB_SAMPLES+=","
+			if [[ "${SAMPLE_DATA_FILES}" == *pod5 ]]; then
+				if [[ -n "${MODKIT_PILEUP_JOB_SAMPLES}" ]]; then
+					MODKIT_PILEUP_JOB_SAMPLES+=","
+				fi
+				MODKIT_PILEUP_JOB_SAMPLES+="${ARRAY_ID}"
+			else
+				printf "WARNING: sample ${SAMPLE} only has .fastq.gz files which may not contain 'mv' tags, skipping methylation.\n" >&2
 			fi
-			MODKIT_PILEUP_JOB_SAMPLES+="${ARRAY_ID}"
 		fi
 	fi
 done
 
 if [[ $VERBOSE == 1 ]]; then
-	echo "ALIGNMENT_JOB_SAMPLES = ${ALIGNMENT_JOB_SAMPLES}"
+	echo "POD5_ALIGNMENT_JOB_SAMPLES = ${POD5_ALIGNMENT_JOB_SAMPLES}"
+	echo "FASTQ_ALIGNMENT_JOB_SAMPLES = ${FASTQ_ALIGNMENT_JOB_SAMPLES}"
 	echo "SORT_JOB_SAMPLES = ${SORT_JOB_SAMPLES}"
 	echo "INDEX_JOB_SAMPLES = ${INDEX_JOB_SAMPLES}"
 	if [[ "${PROCESS_SNP}" == 1 || "${PROCESS_STR}" == 1 || "${PROCESS_CNV}" == 1 ]]; then
+		echo "CLAIR3_MV_JOB_SAMPLES = ${CLAIR3_MV_JOB_SAMPLES}"
 		echo "CLAIR3_JOB_SAMPLES = ${CLAIR3_JOB_SAMPLES}"
 		if [[ "${PROCESS_STR}" == 1 ]]; then
 			echo "WHATSHAP_JOB_SAMPLES = ${WHATSHAP_JOB_SAMPLES}"
@@ -373,10 +404,13 @@ if [[ $VERBOSE == 1 ]]; then
 	fi
 fi
 
-ALIGNMENT_JOB_ID=""
+POD5_ALIGNMENT_JOB_ID=""
+FASTQ_ALIGNMENT_JOB_ID=""
+VIEW_JOB_ID=""
 SORT_JOB_ID=""
 INDEX_JOB_ID=""
-CLAIR_JOB_ID=""
+CLAIR3_MV_JOB_ID=""
+CLAIR3_JOB_ID=""
 WHATSHAP_JOB_ID=""
 HAPLOTAGGED_INDEX_JOB_ID=""
 MAHI_MAHI_JOB_ID=""
@@ -386,18 +420,28 @@ SNIFFLES_JOB_ID=""
 NEEDLR_JOB_ID=""
 MODKIT_JOB_ID=""
 
-if [[ -n "${ALIGNMENT_JOB_SAMPLES}" ]]; then
-	echo "Running Dorado basecaller alignment job on sample array indices: ${ALIGNMENT_JOB_SAMPLES}"
+if [[ -n "${POD5_ALIGNMENT_JOB_SAMPLES}" ]]; then
+	echo "Running Dorado basecaller alignment job on sample array indices: ${POD5_ALIGNMENT_JOB_SAMPLES}"
 	if [[ $DRYRUN == 0 ]]; then
-		ALIGNMENT_JOB_ID=$(submit_slurm_job $DORADO_SCRIPT $ALIGNMENT_JOB_SAMPLES $SLURM_GPU_PARTITIONS)
+		POD5_ALIGNMENT_JOB_ID=$(submit_slurm_job $DORADO_SCRIPT $POD5_ALIGNMENT_JOB_SAMPLES $SLURM_GPU_PARTITIONS)
 	else
-		echo "ALIGNMENT_JOB_ID=\$(submit_slurm_job $DORADO_SCRIPT $ALIGNMENT_JOB_SAMPLES $SLURM_GPU_PARTITIONS)"
+		echo "POD5_ALIGNMENT_JOB_ID=\$(submit_slurm_job $DORADO_SCRIPT $POD5_ALIGNMENT_JOB_SAMPLES $SLURM_GPU_PARTITIONS)"
+	fi
+fi
+if [[ -n "${FASTQ_ALIGNMENT_JOB_SAMPLES}" ]]; then
+	echo "Running Minimap2 alignment and Samtools view jobs on sample array indices: ${FASTQ_ALIGNMENT_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		FASTQ_ALIGNMENT_JOB_ID=$(submit_slurm_job $MINIMAP2_SCRIPT $FASTQ_ALIGNMENT_JOB_SAMPLES $SLURM_PARTITIONS)
+		VIEW_JOB_ID=$(submit_slurm_job $SAMTOOLS_VIEW_SCRIPT $FASTQ_ALIGNMENT_JOB_SAMPLES $SLURM_PARTITIONS $FASTQ_ALIGNMENT_JOB_ID)
+	else
+		echo "FASTQ_ALIGNMENT_JOB_ID=\$(submit_slurm_job $MINIMAP2_SCRIPT $FASTQ_ALIGNMENT_JOB_SAMPLES $SLURM_PARTITIONS)"
+		echo "VIEW_JOB_ID=\$(submit_slurm_job $SAMTOOLS_VIEW_SCRIPT $FASTQ_ALIGNMENT_JOB_SAMPLES $SLURM_PARTITIONS $FASTQ_ALIGNMENT_JOB_ID)"
 	fi
 fi
 if [[ -n "${SORT_JOB_SAMPLES}" ]]; then
 	echo "Running samtools sort job on sample array indices: ${SORT_JOB_SAMPLES}"
 	if [[ $DRYRUN == 0 ]]; then
-		SORT_JOB_ID=$(submit_slurm_job $SAMTOOLS_SORT_SCRIPT $SORT_JOB_SAMPLES $SLURM_PARTITIONS $ALIGNMENT_JOB_ID)
+		SORT_JOB_ID=$(submit_slurm_job $SAMTOOLS_SORT_SCRIPT $SORT_JOB_SAMPLES $SLURM_PARTITIONS $POD5_ALIGNMENT_JOB_ID $VIEW_JOB_ID)
 	else
 		echo "SORT_JOB_ID=\$(submit_slurm_job $SAMTOOLS_SORT_SCRIPT $SORT_JOB_SAMPLES $SLURM_PARTITIONS $ALIGNMENT_JOB_ID)"
 	fi
@@ -413,17 +457,25 @@ fi
 if [[ -n "${CLAIR3_JOB_SAMPLES}" ]]; then
 	echo "Running Clair3 SNP calling job on sample array indices: ${CLAIR3_JOB_SAMPLES}"
 	if [[ $DRYRUN == 0 ]]; then
-		CLAIR_JOB_ID=$(submit_slurm_job $CLAIR3_SCRIPT $CLAIR3_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)
+		CLAIR3_JOB_ID=$(submit_slurm_job $CLAIR3_SCRIPT $CLAIR3_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)
 	else
-		echo "CLAIR_JOB_ID=\$(submit_slurm_job $CLAIR3_SCRIPT $CLAIR3_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)"
+		echo "CLAIR3_JOB_ID=\$(submit_slurm_job $CLAIR3_SCRIPT $CLAIR3_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)"
+	fi
+fi
+if [[ -n "${CLAIR3_MV_JOB_SAMPLES}" ]]; then
+	echo "Running Clair3 SNP (with mv) calling job on sample array indices: ${CLAIR3_MV_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		CLAIR3_MV_JOB_ID=$(submit_slurm_job $CLAIR3_MV_SCRIPT $CLAIR3_MV_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)
+	else
+		echo "CLAIR3_MV_JOB_ID=\$(submit_slurm_job $CLAIR3_MV_SCRIPT $CLAIR3_MV_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)"
 	fi
 fi
 if [[ -n "${WHATSHAP_JOB_SAMPLES}" ]]; then
 	echo "Running WhatsHap haplotagging job on sample array indices: ${WHATSHAP_JOB_SAMPLES}"
 	if [[ $DRYRUN == 0 ]]; then
-		WHATSHAP_JOB_ID=$(submit_slurm_job $WHATSHAP_SCRIPT $WHATSHAP_JOB_SAMPLES $SLURM_GPU_PARTITIONS $CLAIR_JOB_ID)
+		WHATSHAP_JOB_ID=$(submit_slurm_job $WHATSHAP_SCRIPT $WHATSHAP_JOB_SAMPLES $SLURM_GPU_PARTITIONS $CLAIR_JOB_ID $CLAIR3_MV_JOB_ID)
 	else
-		echo "WHATSHAP_JOB_ID=\$(submit_slurm_job $WHATSHAP_SCRIPT $WHATSHAP_JOB_SAMPLES $SLURM_GPU_PARTITIONS $CLAIR_JOB_ID)"
+		echo "WHATSHAP_JOB_ID=\$(submit_slurm_job $WHATSHAP_SCRIPT $WHATSHAP_JOB_SAMPLES $SLURM_GPU_PARTITIONS $CLAIR_JOB_ID $CLAIR3_MV_JOB_ID)"
 	fi
 fi
 if [[ -n "${HAPLOTAGGED_INDEX_JOB_SAMPLES}" ]]; then
@@ -453,9 +505,9 @@ fi
 if [[ -n "${SPECTRE_JOB_SAMPLES}" ]]; then
 	echo "Running Spectre job on sample array indices: ${SPECTRE_JOB_SAMPLES}"
 	if [[ $DRYRUN == 0 ]]; then
-		SPECTRE_JOB_ID=$(submit_slurm_job $SPECTRE_SCRIPT $SPECTRE_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR_JOB_ID $MOSDEPTH_JOB_ID)
+		SPECTRE_JOB_ID=$(submit_slurm_job $SPECTRE_SCRIPT $SPECTRE_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR_JOB_ID $CLAIR3_MV_JOB_ID $MOSDEPTH_JOB_ID)
 	else
-		echo "SPECTRE_JOB_ID=\$(submit_slurm_job $SPECTRE_SCRIPT $SPECTRE_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR_JOB_ID $MOSDEPTH_JOB_ID)"
+		echo "SPECTRE_JOB_ID=\$(submit_slurm_job $SPECTRE_SCRIPT $SPECTRE_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR_JOB_ID $CLAIR3_MV_JOB_ID $MOSDEPTH_JOB_ID)"
 	fi
 fi
 if [[ -n "${SNIFFLES_JOB_SAMPLES}" ]]; then
