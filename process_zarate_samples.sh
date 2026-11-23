@@ -38,7 +38,7 @@ check_args() {
 }
 
 check_sample() {
-	DATA_SUB_DIRECTORY=$(grep $1 $SLURM_ARRAY_FILE | awk '{ print $3 }')
+	DATA_SUB_DIRECTORY=$(awk -v ArrayTaskID=$1 '$1==ArrayTaskID {print $3}' $SLURM_ARRAY_FILE)
 	POD5_DIRECTORY="${RUNS_DIRECTORY}/${DATA_SUB_DIRECTORY}/pod5"
 	FASTQ_DIRECTORY="${RUNS_DIRECTORY}/${DATA_SUB_DIRECTORY}/fastq_pass"
 	if [[ -z "${POD5_DIRECTORY}" && -z "${FASTQ_DIRECTORY}" ]]; then
@@ -175,6 +175,7 @@ INDEX_JOB_SAMPLES=""
 
 CLAIR3_MV_JOB_SAMPLES=""
 CLAIR3_JOB_SAMPLES=""
+EXOMISER_JOB_SAMPLES=""
 
 WHATSHAP_JOB_SAMPLES=""
 HAPLOTAGGED_INDEX_JOB_SAMPLES=""
@@ -268,6 +269,16 @@ for i in "${!SAMPLES[@]}"; do
 					CLAIR3_JOB_SAMPLES+=","
 				fi
 				CLAIR3_JOB_SAMPLES+="${ARRAY_ID}"
+			fi
+		fi
+		if [[ "${PROCESS_SNP}" == 1 ]]; then
+			SAMPLE_EXOMISER_GENOMISER_VARIANTS_FILE="${RESULTS_DIRECTORY}/${SAMPLE}/exomiser/genomiser/${RESULT_FILE_PREFIX}${SAMPLE}.variants.tsv"
+			if [[ ! -s "${SAMPLE_EXOMISER_GENOMISER_VARIANTS_FILE}" ]]; then
+				# Exomiser's second stage (Genomiser) output file does not exist
+				if [[ -n "${EXOMISER_JOB_SAMPLES}" ]]; then
+					EXOMISER_JOB_SAMPLES+=","
+				fi
+				EXOMISER_JOB_SAMPLES+="${ARRAY_ID}"
 			fi
 		fi
 		if [[ "${PROCESS_STR}" == 1 ]]; then
@@ -385,6 +396,9 @@ if [[ $VERBOSE == 1 ]]; then
 	if [[ "${PROCESS_SNP}" == 1 || "${PROCESS_STR}" == 1 || "${PROCESS_CNV}" == 1 ]]; then
 		echo "CLAIR3_MV_JOB_SAMPLES = ${CLAIR3_MV_JOB_SAMPLES}"
 		echo "CLAIR3_JOB_SAMPLES = ${CLAIR3_JOB_SAMPLES}"
+		if [[ "${PROCESS_SNP}" == 1 ]]; then
+			echo "EXOMISER_JOB_SAMPLES = ${EXOMISER_JOB_SAMPLES}"
+		fi
 		if [[ "${PROCESS_STR}" == 1 ]]; then
 			echo "WHATSHAP_JOB_SAMPLES = ${WHATSHAP_JOB_SAMPLES}"
 			echo "HAPLOTAGGED_INDEX_JOB_SAMPLES = ${HAPLOTAGGED_INDEX_JOB_SAMPLES}"
@@ -411,6 +425,7 @@ SORT_JOB_ID=""
 INDEX_JOB_ID=""
 CLAIR3_MV_JOB_ID=""
 CLAIR3_JOB_ID=""
+EXOMISER_JOB_ID=""
 WHATSHAP_JOB_ID=""
 HAPLOTAGGED_INDEX_JOB_ID=""
 MAHI_MAHI_JOB_ID=""
@@ -468,6 +483,14 @@ if [[ -n "${CLAIR3_MV_JOB_SAMPLES}" ]]; then
 		CLAIR3_MV_JOB_ID=$(submit_slurm_job $CLAIR3_MV_SCRIPT $CLAIR3_MV_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)
 	else
 		echo "CLAIR3_MV_JOB_ID=\$(submit_slurm_job $CLAIR3_MV_SCRIPT $CLAIR3_MV_JOB_SAMPLES $SLURM_GPU_PARTITIONS $INDEX_JOB_ID)"
+	fi
+fi
+if [[ -n "${EXOMISER_JOB_SAMPLES}" ]]; then
+	echo "Running Exomiser job on sample array indices: ${EXOMISER_JOB_SAMPLES}"
+	if [[ $DRYRUN == 0 ]]; then
+		EXOMISER_JOB_ID=$(submit_slurm_job $EXOMISER_SCRIPT $EXOMISER_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR3_JOB_ID $CLAIR3_MV_JOB_ID)
+	else
+		echo "EXOMISER_JOB_ID=\$(submit_slurm_job $EXOMISER_SCRIPT $EXOMISER_JOB_SAMPLES $SLURM_PARTITIONS $CLAIR3_JOB_ID $CLAIR3_MV_JOB_ID)"
 	fi
 fi
 if [[ -n "${WHATSHAP_JOB_SAMPLES}" ]]; then

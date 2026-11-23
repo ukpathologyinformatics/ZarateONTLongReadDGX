@@ -23,6 +23,7 @@ The following tools are employed in this analysis:
 * [Minimap2](https://github.com/lh3/minimap2)
 * [samtools](https://github.com/samtools/samtools)
 * [Clair3](https://github.com/HKU-BAL/clair3)
+* [Exomiser](https://github.com/exomiser/Exomiser)
 * [WhatsHap](https://github.com/whatshap/whatshap)
 * [Nanopore Mahi-mahi](https://github.com/nanoporetech/mahi-mahi)
 * [Sniffles](https://github.com/fritzsedlazeck/sniffles)
@@ -32,25 +33,25 @@ The following tools are employed in this analysis:
 * [Nanopore Modkit](https://github.com/nanoporetech/modkit)
 
 ## Pipeline Flow
-                      ONT Sequencing (.pod5) | ONT Sequencing (.fastq.gz)
-                                |                       |
-                         Dorado basecaller           Minimap2
-                                 |						|
-								 |  			  samtools view
-								  \____________________/
-									        |
-		               ------------samtools sort/index-------------
-		              |             |              |               |
-		           clair3        sniffles       mosdepth         modkit
-		         <phase,SNP>        |              |         <Methylation>
-		              |           needLR        spectre
-		           whatshap        <SV>          <CNV>
-		  	      <haplotag>
-		              |
-		  	    samtools index
-		    	      |
-		          mahi-mahi
-		            <STR>
+                          ONT Sequencing (.pod5) | ONT Sequencing (.fastq.gz)
+                                    |                       |
+                             Dorado basecaller           Minimap2
+                                     |						|
+    								 |  			  samtools view
+    								  \____________________/
+    									        |
+    		               ------------samtools sort/index-------------
+    		              |             |              |               |
+    		           Clair3        sniffles       mosdepth         ModKit
+    		 ------- <phase,SNP>        |              |         <Methylation>
+    		|             |           needLR        Spectre
+    	Exomiser	   WhatsHap        <SV>          <CNV>
+    <Anno/Rank SNP>	  <haplotag>
+    		              |
+    		  	    samtools index
+    		    	      |
+    		          Mahi-mahi
+    		            <STR>
 
 ## Usage
 
@@ -103,6 +104,7 @@ The various task SBATCH scripts can be run manually from the directory with your
 * Minimap2 - v2.31
 * samtools - v1.24
 * Clair3 - v2.0.4
+* Exomiser - v15.1.0
 * WhatsHap - v2.8
 * Mahi-mahi - v1.0.0
 * sniffles - v2.8.0
